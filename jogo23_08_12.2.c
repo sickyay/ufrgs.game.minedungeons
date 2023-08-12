@@ -1,7 +1,7 @@
 /*
 scan_map do mapa(tipo draw_map)
 fogueiras devem ser andavéis? no test_move
-AJEITAR BUG DA MUNIÇÃO
+
 */
 
 #include <raylib.h>
@@ -92,17 +92,17 @@ bool test_move(struct STRUCT__STATS object, char map_matrix[MAP_HEIGHT][MAP_WIDT
     return flag;
 }
 
-void move(struct STRUCT__STATS *a,char matrix[MAP_HEIGHT][MAP_WIDTH+1]){
+void move(struct STRUCT__STATS *object,char matrix[MAP_HEIGHT][MAP_WIDTH+1]){
 
     char temp;
 
-    temp = matrix[a->y][a->x];
-    matrix[a->y][a->x] = ' ';
+    temp = matrix[object->y][object->x];
+    matrix[object->y][object->x] = ' ';
 
-    a->x = a->x + a->dx;
-    a->y = a->y + a->dy;
+    object->x = object->x + object->dx;
+    object->y = object->y + object->dy;
 
-    matrix[a->y][a->x] = temp;
+    matrix[object->y][object->x] = temp;
 }
 
 int shoot(struct STRUCT__STATS *shooter,struct STRUCT__STATS *shot, char matrix[MAP_HEIGHT][MAP_WIDTH+1],int initial_x ,int initial_y){
@@ -155,7 +155,7 @@ int load_map(char archive_name[], char current_map[MAP_HEIGHT][MAP_WIDTH+1]){
 int main(void){
 
     srand(time(NULL)); //inicializa o gerador de numero aleatório
-    InitWindow(LARGURA, ALTURA, "Quadrados");//Inicializa janela, com certo tamanho e tıtulo
+    InitWindow(LARGURA, ALTURA, "Joguin do balacobaco");//Inicializa janela, com certo tamanho e tıtulo
     SetTargetFPS(FPS);// Ajusta a execu¸c~ao do jogo para 60 frames por segundo
 
     //declara o jogador e o inimigo
@@ -279,3 +279,4 @@ int main(void){
     CloseWindow();// Fecha a janela e o contexto OpenGL
     return 0;
 }
+    
