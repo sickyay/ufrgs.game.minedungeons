@@ -56,6 +56,7 @@ struct STRUCT_EFFECT //estrutura utilizada para temporizadores
 {
     int x;//posicoes
     int y;
+    int type;
     struct STRUCT_TIMER lifetime;
 };
 
@@ -71,6 +72,8 @@ struct STRUCT_STATS //estrutura utilizada tanto para inimigos, player e projetei
     int health_points;//pontos de vida
     int flag;
     int count;
+    bool intends_to_put_bomb;
+    int bomb_inventory;
 
     struct STRUCT_TIMER step;//timers variados
     struct STRUCT_TIMER shoot;
@@ -155,9 +158,9 @@ bool draw_effects (struct STRUCT_EFFECT smoke_vector[])
     return 1;
 }
 
-bool scan_map (char matrix[MAP_LINES][MAP_COLUMNS+1],struct STRUCT_STATS *player_variable, struct STRUCT_STATS enemy_vector[], struct STRUCT_STATS projectile_vector[], struct STRUCT_STATS wall_vector[], struct STRUCT_STATS trap_vector[], struct STRUCT_STATS bomb_vector[])//funcao que le o que acontece na matriz do mapa
+bool scan_map (char matrix[MAP_LINES][MAP_COLUMNS+1],struct STRUCT_STATS *player_variable, struct STRUCT_STATS enemy_vector[], struct STRUCT_STATS projectile_vector[], struct STRUCT_STATS wall_vector[], struct STRUCT_STATS trap_vector[], struct STRUCT_STATS bomb_vector[], int *bomb_counter)//funcao que le o que acontece na matriz do mapa
 {
-    int wall_counter = 0, enemy_counter = 0, portal_counter = 0, trap_counter = 0, bomb_counter = 0, projectile_counter = 0;
+    int wall_counter = 0, enemy_counter = 0, portal_counter = 0, trap_counter = 0, projectile_counter = 0;
 
     for (int y = 0; y < MAP_LINES; y++)//colunas
     {
@@ -178,13 +181,13 @@ bool scan_map (char matrix[MAP_LINES][MAP_COLUMNS+1],struct STRUCT_STATS *player
                 enemy_counter++;
                 break;
             case 'B'://bomba
-                bomb_vector[bomb_counter].x = x;
-                bomb_vector[bomb_counter].y = y;
-                bomb_vector[bomb_counter].health_points = 1;
-                bomb_counter++;
+                bomb_vector[*bomb_counter].x = x;
+                bomb_vector[*bomb_counter].y = y;
+                bomb_vector[*bomb_counter].health_points = 1;
+                *bomb_counter = *bomb_counter + 1;
                 break;
             case 'P'://portal
-
+                //temo que fazer isso
                 break;
             case 'J'://player
                 player_variable->x = x;
@@ -306,7 +309,7 @@ void damage_position(int x_position, int y_position, int damage, struct STRUCT_S
     }
 }
 
-bool shoot(struct STRUCT_STATS *shooter,struct STRUCT_STATS *shot, char matrix[MAP_LINES][MAP_COLUMNS+1],int initial_x,int initial_y)
+bool shoot(struct STRUCT_STATS *shooter,struct STRUCT_STATS *shot, char matrix[MAP_LINES][MAP_COLUMNS+1],int initial_x,int initial_y,int *shot_counter)
 {
     //funcao do tiro
 
@@ -320,12 +323,34 @@ bool shoot(struct STRUCT_STATS *shooter,struct STRUCT_STATS *shot, char matrix[M
 
         matrix[shot->y][shot->x] = 'o';//a matriz recebe o char do tiro e aparece na tela
 
-        shooter->count++;//conta quantos projeteis foram acionados
-        if(shooter->count==MAX_PROJECTILES)//se a contagem for igual ao maximo de projeteis na tela
+        *shot_counter = *shot_counter+1;//conta quantos projeteis foram acionados
+        if(*shot_counter==MAX_PROJECTILES)//se a contagem for igual ao maximo de projeteis na tela
         {
-            shooter->count = 0;//zera a contagem
+            *shot_counter = 0;//zera a contagem
         }
     }
+}
+
+bool place_bomb(struct STRUCT_STATS *placer,struct STRUCT_STATS *bomb, char matrix[MAP_LINES][MAP_COLUMNS+1],int initial_x,int initial_y,int *bomb_counter)
+{
+    //funcao de botar bomba
+
+    if(test_if_object_is_there(placer,matrix,initial_x,initial_y,' '))//testa se pode ser "criado" o tiro
+    {
+        bomb->x = placer->x+initial_x;//a posicao do tiro eh a posicao do player mais a posicao inicial do tiro
+        bomb->y = placer->y+initial_y;
+        bomb->health_points = 1;
+
+        matrix[bomb->y][bomb->x] = 'B';//a matriz recebe o char da bomba e aparece na tela
+
+        placer->bomb_inventory = placer->bomb_inventory - 1;
+        *bomb_counter = *bomb_counter+1;//conta quantos projeteis foram acionados
+        if(*bomb_counter==MAX_PROJECTILES)//se a contagem for igual ao maximo de projeteis na tela
+        {
+            *bomb_counter = 0;//zera a contagem
+        }
+        return true;
+    }else return false;
 }
 
 bool explode(int x_origin,int y_origin, float radius, int beam_n, int damage, char matrix[MAP_LINES][MAP_COLUMNS+1] ,struct STRUCT_STATS *player_variable, struct STRUCT_STATS enemy_vector[], struct STRUCT_STATS projectile_vector[], struct STRUCT_STATS wall_vector[], struct STRUCT_STATS bomb_vector[], struct STRUCT_EFFECT smoke_vector[], int *smoke_counter)
@@ -409,6 +434,8 @@ void clear_data(struct STRUCT_STATS *object)//reseta as informações do objetos
     object->health_points = 0;
     object->flag = 0;
     object->count = 0;
+    object->intends_to_put_bomb = false;
+    object->bomb_inventory = 0;
 
     object->step.timer_start = 0;
     object->step.timer_current = 0;
@@ -427,6 +454,7 @@ void clear_effect_data(struct STRUCT_EFFECT *effect)//reseta as informações do
 {
     effect->x = -1;
     effect->y = -1;
+    effect->type = 0;
 
     effect->lifetime.timer_start = 0;
     effect->lifetime.timer_current = 0;
@@ -449,47 +477,26 @@ int main(void)
     struct STRUCT_STATS bomb[MAX_BOMBS];
     struct STRUCT_EFFECT smoke[MAX_SMOKES];
 
-    int i,j;//contadores declarados aqui pois sao enviados por referencia
+    int i,j,k;//contadores declarados aqui pois sao enviados por referencia
     int past_x ,past_y;
+    int shot_counter = 0;
+    int bomb_counter = 0;
     int smoke_counter = 0;
 
     //garante que todos os dados de entidades estejam zeradas
     clear_data(&player);
+    for(i=0; i<MAX_ENEMIES; i++)clear_data(&enemy[i]);
+    for(i=0; i<MAX_PROJECTILES; i++)clear_data(&projectile[i]);
+    for(i=0; i<MAX_WALLS; i++)clear_data(&wall[i]);
+    for(i=0; i<MAX_TRAPS; i++)clear_data(&trap[i]);
+    for(i=0; i<MAX_BOMBS; i++)clear_data(&bomb[i]);
+    for(i=0; i<MAX_SMOKES; i++)clear_effect_data(&smoke[i]);
 
-    for(i=0; i<MAX_ENEMIES; i++)
-    {
-        clear_data(&enemy[i]);
-    }
-
-    for(i=0; i<MAX_PROJECTILES; i++)
-    {
-        clear_data(&projectile[i]);
-    }
-
-    for(i=0; i<MAX_WALLS; i++)
-    {
-        clear_data(&wall[i]);
-    }
-
-    for(i=0; i<MAX_TRAPS; i++)
-    {
-        clear_data(&trap[i]);
-    }
-
-    for(i=0; i<MAX_BOMBS; i++)
-    {
-        clear_data(&bomb[i]);
-    }
-
-    for(i=0; i<MAX_SMOKES; i++)
-    {
-        clear_effect_data(&smoke[i]);
-    }
     char map[MAP_LINES][MAP_COLUMNS+1];//declara a matriz do mapa
     char map_file_name[MAX_ARCHIVE_NAME] = "map000.txt";//nome da versao do mapa que estamos jogando
 
     load_map(map_file_name,map);//FUNCAO DE CARREGAMENTO DO MAPA
-    scan_map(map,&player,enemy,projectile,wall,trap,bomb);//FUNCAO DE SCANEAMENTO DE MAPA
+    scan_map(map,&player,enemy,projectile,wall,trap,bomb,&bomb_counter);//FUNCAO DE SCANEAMENTO DE MAPA
 
     while (!WindowShouldClose()) //Roda enquanto não for fechada a tela
     {
@@ -510,6 +517,15 @@ int main(void)
             }
         }
 
+        if(test_if_object_is_there(&player,map,player.dx,player.dy,'B')){
+            for(i=0; i<MAX_BOMBS; i++){
+                if(bomb[i].x==(player.x+player.dx)&&(bomb[i].y==(player.y+player.dy))){
+                    map[bomb[i].y][bomb[i].x] = ' ';
+                    clear_data(&bomb[i]);
+                    player.bomb_inventory = player.bomb_inventory+1;
+                }
+            }
+        }
         if(test_move(player,map)){
             move(&player,map);//se sim, ele move
         }
@@ -537,9 +553,16 @@ int main(void)
             }
         }
 
+        if (IsKeyDown(KEY_E)) player.intends_to_put_bomb = true;
+
         if(player.head_direction_x!=0||player.head_direction_y!=0)//se alguma das direções não for nula
         {
-            shoot(&player, &projectile[player.count], map, player.head_direction_x, player.head_direction_y);//atira
+            if(player.intends_to_put_bomb==true&&player.bomb_inventory>0){
+                if(place_bomb(&player, &bomb[bomb_counter], map, player.head_direction_x, player.head_direction_y, &bomb_counter)) player.intends_to_put_bomb = false;
+            }else{
+                shoot(&player, &projectile[shot_counter], map, player.head_direction_x, player.head_direction_y, &shot_counter);//atira
+                player.intends_to_put_bomb = false;
+            }
         }
 
         player.head_direction_x = 0;
