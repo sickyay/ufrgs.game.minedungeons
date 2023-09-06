@@ -1,0 +1,821 @@
+/*
+refazer logica de movimento do inimigo
+menu - em progresso
+portal
+HUD
+coletaveis?
+save de mapa + estado atual
+*/
+
+#include <math.h>
+#include <raylib.h>
+#include <string.h>
+#include <time.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+#define MAP_LINES 30 //linhas
+#define MAP_COLUMNS 60 //colunas
+#define SIDE 20 //em pixels (DEVE SER UM NÚMERO PAR)
+#define MAP_PIXEL_WIDTH (MAP_COLUMNS*SIDE) //em pixels
+#define MAP_PIXEL_HEIGHT (MAP_LINES*SIDE) //em pixels
+
+#define MENU_BUTTON_PIXEL_WIDTH (MAP_PIXEL_WIDTH/5)*2 //em pixels
+#define MENU_PIXEL_BORDER 5 //em pixels
+
+#define WALL_HP 3
+
+#define FPS 60 //taxa de frames por segundo
+
+#define MAX_ENEMIES 15 //inimigos
+#define MAX_WALLS 1600
+#define MAX_TRAPS 100
+#define MAX_BOMBS 100
+#define MAX_PROJECTILES 100 //maximo de tiros na tela ao mesmo tempo
+#define MAX_SMOKES 400
+#define MAX_STREAMS 400
+#define MAX_ARCHIVE_NAME 25 //maximo de caracteres no nome do arquivo
+
+#define PLAYER_STEP_COOLDOWN 0.1 //cooldown do movimento do player
+#define PLAYER_ACTION_COOLDOWN 0.3 //cooldown do tiro do player
+
+#define ENEMY_STEP_COOLDOWN 0.3
+#define ENEMY_ACTION_COOLDOWN 0.5
+
+#define TRAP_ACTION_COOLDOWN 0.25
+
+#define SMOKE_LIFETIME 0.6
+#define STREAM_LIFETIME 0.2
+
+#define BOMB_RADIUS 6
+#define BOMB_DAMAGE 10
+
+struct STRUCT_TIMER //estrutura utilizada para temporizadores
+{
+    long int timer_start;//variaveis para logica de cooldown de passos
+    long int timer_current;
+    long int cooldown;
+};
+
+struct STRUCT_EFFECT //estrutura utilizada para temporizadores
+{
+    int x;//posicoes
+    int y;
+    int type;
+    struct STRUCT_TIMER lifetime;
+};
+
+struct STRUCT_STATS //estrutura utilizada tanto para inimigos, player e projeteis
+{
+    int x;//posicoes
+    int y;
+    int dx;//intencao de deslocamento
+    int dy;
+    int head_direction_x;//para onde está "olhando"
+    int head_direction_y;
+
+    int health_points;//pontos de vida
+
+    bool intends_to_put_bomb;
+    int bomb_inventory;
+
+    struct STRUCT_TIMER step;//timers variados
+    struct STRUCT_TIMER action;
+};
+
+bool draw_map (char map_matrix[MAP_LINES][MAP_COLUMNS+1],struct STRUCT_STATS object, struct STRUCT_STATS object1, struct STRUCT_STATS trap_vector[])//funcao que le o que acontece na matriz do mapa
+{
+
+    ClearBackground(RAYWHITE);//limpa a tela e define cor de fundo
+    //Texture2D isaac = LoadTexture("resources/isaac.png"); // Texture loading
+    //Texture2D clickety = LoadTexture("resources/clickety.png"); // Texture loading
+
+    for(int i=0; i<MAX_TRAPS; i++)
+    {
+        DrawRectangle(trap_vector[i].x*SIDE, trap_vector[i].y*SIDE, SIDE, SIDE, ORANGE);
+    }
+
+    for (int y = 0; y < MAP_LINES; y++)//colunas
+    {
+        for (int x = 0; x < MAP_COLUMNS; x++)//linhas
+        {
+            switch(map_matrix[y][x])//interpretacao dos caracteres
+            {
+
+            case '#'://parede
+                DrawRectangle(x*SIDE, y*SIDE, SIDE, SIDE, (Color){0, 0, 0, 255});
+                break;
+
+            case 'I'://inimigo
+                //DrawTexture(clickety,object.x*125,object.y*125,WHITE);
+                DrawRectangle(x*SIDE, y*SIDE, SIDE, SIDE, RED);
+                break;
+
+            case 'B'://bomba
+                DrawRectangle(x*SIDE, y*SIDE, SIDE, SIDE, GRAY);
+                break;
+
+            case 'P'://portal
+                DrawRectangle(x*SIDE, y*SIDE, SIDE, SIDE, PURPLE);
+                break;
+
+            case 'J'://player
+                //DrawTexture(isaac,object1.x*125,object1.y*125,WHITE);
+                DrawRectangle(x*SIDE, y*SIDE, SIDE, SIDE, GREEN);
+                break;
+
+            case 'X'://armadilha
+                map_matrix[y][x] = ' ';
+                break;
+
+            case 'o'://tiro
+                DrawCircle(x*SIDE+SIDE/2, y*SIDE+SIDE/2, SIDE/4, BLUE);
+                break;
+            }
+        }
+    }
+
+    DrawText(TextFormat("Your HP: %1i", object1.health_points), 20, 2, 40, RED);//vida do inimigo
+    return 1;
+}
+
+bool draw_menu (int selected_option)
+{
+
+    int i;
+    int button_height = (MAP_PIXEL_HEIGHT/6);
+    char options_text[6][125] = {{"GAME PAUSED"},{"N - New run"},{"L - Load save"},{"S - Save game"},{"Q - Quit game"},{"M - Close Menu"}};
+
+    ClearBackground((Color){200,200,200,255});//limpa a tela e define cor de fundo
+    for(i = 0;i<6;i++){
+        if(selected_option==i){
+            DrawRectangle(MENU_PIXEL_BORDER, (button_height*i)+MENU_PIXEL_BORDER, MENU_BUTTON_PIXEL_WIDTH, button_height-MENU_PIXEL_BORDER*2, (Color){0,0,0,255});
+        }else{
+            DrawRectangle(MENU_PIXEL_BORDER, (button_height*i)+MENU_PIXEL_BORDER, MENU_BUTTON_PIXEL_WIDTH, button_height-MENU_PIXEL_BORDER*2, (Color){255,255,255,255});
+        }
+        DrawText(options_text[i], (MENU_PIXEL_BORDER)+button_height/6, (button_height)*i+MENU_PIXEL_BORDER+button_height/4, button_height/2, RED);
+    }
+    return true;
+}
+
+bool draw_effects (struct STRUCT_EFFECT smoke_vector[], struct STRUCT_EFFECT stream_vector[])
+{
+    int i, j;
+    int effect_pos_x;
+    int effect_pos_y;
+
+    for(i=0; i<MAX_SMOKES; i++)
+    {
+        smoke_vector[i].lifetime.timer_current = clock();
+        if(smoke_vector[i].lifetime.timer_current - smoke_vector[i].lifetime.timer_start >= smoke_vector[i].lifetime.cooldown){
+            smoke_vector[i].x = -1;
+            smoke_vector[i].y = -1;
+        }
+        if(smoke_vector[i].x>=0&&smoke_vector[i].x<MAP_COLUMNS&&smoke_vector[i].y>=0&&smoke_vector[i].y<MAP_LINES){
+            if(smoke_vector[i].lifetime.timer_current - smoke_vector[i].lifetime.timer_start <= smoke_vector[i].lifetime.cooldown){
+                for(j=0;j<2;j++){
+                    DrawRectangle((smoke_vector[i].x*SIDE)+((rand()%(SIDE*2)-(SIDE/2))), (smoke_vector[i].y*SIDE)+((rand()%(SIDE*2)-(SIDE/2))), SIDE/2, SIDE/2, (Color){255-(((smoke_vector[i].lifetime.timer_current-smoke_vector[i].lifetime.timer_start)*255)/smoke_vector[i].lifetime.cooldown), 0, 0, 255-(((smoke_vector[i].lifetime.timer_current-smoke_vector[i].lifetime.timer_start)*255)/smoke_vector[i].lifetime.cooldown)});
+                }
+            }
+        }
+    }
+    for(i=0; i<MAX_STREAMS; i++)
+    {
+        stream_vector[i].lifetime.timer_current = clock();
+        if(stream_vector[i].lifetime.timer_current - stream_vector[i].lifetime.timer_start >= stream_vector[i].lifetime.cooldown){
+            stream_vector[i].x = -1;
+            stream_vector[i].y = -1;
+        }
+        if(stream_vector[i].x>=0&&stream_vector[i].x<MAP_COLUMNS&&stream_vector[i].y>=0&&stream_vector[i].y<MAP_LINES){
+            if(stream_vector[i].lifetime.timer_current - stream_vector[i].lifetime.timer_start <= stream_vector[i].lifetime.cooldown){
+                effect_pos_x = (stream_vector[i].x*SIDE);
+                effect_pos_y = (stream_vector[i].y*SIDE);
+                switch(stream_vector[i].type){
+                    case 0:
+                        DrawLine(effect_pos_x+(SIDE/2), effect_pos_y+(SIDE/2),effect_pos_x+(SIDE/2) ,effect_pos_y+SIDE , (Color){0, 0, 255, 255-(((stream_vector[i].lifetime.timer_current-stream_vector[i].lifetime.timer_start)*255)/stream_vector[i].lifetime.cooldown)});
+                        stream_vector[i].type = stream_vector[i].type + 1;
+                        break;
+                    case 1:
+                        DrawLine(effect_pos_x+(SIDE/2), effect_pos_y,effect_pos_x+(SIDE/2) ,effect_pos_y+SIDE , (Color){0, 0, 255, 255-(((stream_vector[i].lifetime.timer_current-stream_vector[i].lifetime.timer_start)*255)/stream_vector[i].lifetime.cooldown)});
+                        break;
+                    case 2:
+                        DrawLine(effect_pos_x, effect_pos_y+SIDE,effect_pos_x+(SIDE/2) ,effect_pos_y+(SIDE/2) , (Color){0, 0, 255, 255-(((stream_vector[i].lifetime.timer_current-stream_vector[i].lifetime.timer_start)*255)/stream_vector[i].lifetime.cooldown)});
+                        stream_vector[i].type = stream_vector[i].type + 1;
+                        break;
+                    case 3:
+                        DrawLine(effect_pos_x+SIDE, effect_pos_y,effect_pos_x ,effect_pos_y+SIDE , (Color){0, 0, 255, 255-(((stream_vector[i].lifetime.timer_current-stream_vector[i].lifetime.timer_start)*255)/stream_vector[i].lifetime.cooldown)});
+                        break;
+                    case 4:
+                        DrawLine(effect_pos_x, effect_pos_y+(SIDE/2),effect_pos_x+(SIDE/2) ,effect_pos_y+(SIDE/2) , (Color){0, 0, 255, 255-(((stream_vector[i].lifetime.timer_current-stream_vector[i].lifetime.timer_start)*255)/stream_vector[i].lifetime.cooldown)});
+                        stream_vector[i].type = stream_vector[i].type + 1;
+                        break;
+                    case 5:
+                        DrawLine(effect_pos_x, effect_pos_y+(SIDE/2),effect_pos_x+SIDE ,effect_pos_y+(SIDE/2) , (Color){0, 0, 255, 255-(((stream_vector[i].lifetime.timer_current-stream_vector[i].lifetime.timer_start)*255)/stream_vector[i].lifetime.cooldown)});
+                        break;
+                    case 6:
+                        DrawLine(effect_pos_x, effect_pos_y,effect_pos_x+(SIDE/2) ,effect_pos_y+(SIDE/2) , (Color){0, 0, 255, 255-(((stream_vector[i].lifetime.timer_current-stream_vector[i].lifetime.timer_start)*255)/stream_vector[i].lifetime.cooldown)});
+                        stream_vector[i].type = stream_vector[i].type + 1;
+                        break;
+                    case 7:
+                        DrawLine(effect_pos_x, effect_pos_y,effect_pos_x+SIDE ,effect_pos_y +SIDE, (Color){0, 0, 255, 255-(((stream_vector[i].lifetime.timer_current-stream_vector[i].lifetime.timer_start)*255)/stream_vector[i].lifetime.cooldown)});
+                        break;
+                    case 8:
+                        DrawLine(effect_pos_x+(SIDE/2), effect_pos_y,effect_pos_x+(SIDE/2) ,effect_pos_y+(SIDE/2) , (Color){0, 0, 255, 255-(((stream_vector[i].lifetime.timer_current-stream_vector[i].lifetime.timer_start)*255)/stream_vector[i].lifetime.cooldown)});
+                        stream_vector[i].type = stream_vector[i].type + 1;
+                        break;
+                    case 9:
+                        DrawLine(effect_pos_x+(SIDE/2), effect_pos_y,effect_pos_x+(SIDE/2) ,effect_pos_y+SIDE , (Color){0, 0, 255, 255-(((stream_vector[i].lifetime.timer_current-stream_vector[i].lifetime.timer_start)*255)/stream_vector[i].lifetime.cooldown)});
+                        break;
+                    case 10:
+                        DrawLine(effect_pos_x+SIDE, effect_pos_y,effect_pos_x+(SIDE/2) ,effect_pos_y+(SIDE/2) , (Color){0, 0, 255, 255-(((stream_vector[i].lifetime.timer_current-stream_vector[i].lifetime.timer_start)*255)/stream_vector[i].lifetime.cooldown)});
+                        stream_vector[i].type = stream_vector[i].type + 1;
+                        break;
+                    case 11:
+                        DrawLine(effect_pos_x+SIDE, effect_pos_y,effect_pos_x ,effect_pos_y+SIDE , (Color){0, 0, 255, 255-(((stream_vector[i].lifetime.timer_current-stream_vector[i].lifetime.timer_start)*255)/stream_vector[i].lifetime.cooldown)});
+                        break;
+                    case 12:
+                        DrawLine(effect_pos_x+(SIDE/2), effect_pos_y+(SIDE/2),effect_pos_x +SIDE,effect_pos_y+(SIDE/2) , (Color){0, 0, 255, 255-(((stream_vector[i].lifetime.timer_current-stream_vector[i].lifetime.timer_start)*255)/stream_vector[i].lifetime.cooldown)});
+                        stream_vector[i].type = stream_vector[i].type + 1;
+                        break;
+                    case 13:
+                        DrawLine(effect_pos_x, effect_pos_y+(SIDE/2),effect_pos_x+SIDE ,effect_pos_y+(SIDE/2) , (Color){0, 0, 255, 255-(((stream_vector[i].lifetime.timer_current-stream_vector[i].lifetime.timer_start)*255)/stream_vector[i].lifetime.cooldown)});
+                        break;
+                    case 14:
+                        DrawLine(effect_pos_x+(SIDE/2), effect_pos_y+(SIDE/2),effect_pos_x+SIDE ,effect_pos_y+SIDE , (Color){0, 0, 255, 255-(((stream_vector[i].lifetime.timer_current-stream_vector[i].lifetime.timer_start)*255)/stream_vector[i].lifetime.cooldown)});
+                        stream_vector[i].type = stream_vector[i].type + 1;
+                        break;
+                    case 15:
+                        DrawLine(effect_pos_x, effect_pos_y,effect_pos_x+SIDE ,effect_pos_y +SIDE, (Color){0, 0, 255, 255-(((stream_vector[i].lifetime.timer_current-stream_vector[i].lifetime.timer_start)*255)/stream_vector[i].lifetime.cooldown)});
+                        break;
+                }
+            }
+        }
+    }
+    return 1;
+}
+
+bool scan_map (char matrix[MAP_LINES][MAP_COLUMNS+1],struct STRUCT_STATS *player_variable, struct STRUCT_STATS enemy_vector[], struct STRUCT_STATS projectile_vector[], struct STRUCT_STATS wall_vector[], struct STRUCT_STATS trap_vector[], struct STRUCT_STATS bomb_vector[], int *bomb_counter)//funcao que le o que acontece na matriz do mapa
+{
+    int wall_counter = 0, enemy_counter = 0, portal_counter = 0, trap_counter = 0, projectile_counter = 0;
+
+    for (int y = 0; y < MAP_LINES; y++)//colunas
+    {
+        for (int x = 0; x < MAP_COLUMNS; x++)//linhas
+        {
+            switch(matrix[y][x])//interpretacao dos caracteres
+            {
+            case '#'://parede
+                wall_vector[wall_counter].x = x;
+                wall_vector[wall_counter].y = y;
+                wall_vector[wall_counter].health_points = WALL_HP;;
+                wall_counter++;
+                break;
+            case 'I'://inimigo
+                enemy_vector[enemy_counter].x = x;
+                enemy_vector[enemy_counter].y = y;
+                enemy_vector[enemy_counter].health_points = 5;
+                enemy_vector[enemy_counter].step.cooldown = CLOCKS_PER_SEC*ENEMY_STEP_COOLDOWN;
+                enemy_vector[enemy_counter].action.cooldown = CLOCKS_PER_SEC*ENEMY_ACTION_COOLDOWN;
+                enemy_counter++;
+                break;
+            case 'B'://bomba
+                bomb_vector[*bomb_counter].x = x;
+                bomb_vector[*bomb_counter].y = y;
+                bomb_vector[*bomb_counter].health_points = 1;
+                *bomb_counter = *bomb_counter + 1;
+                break;
+            case 'P'://portal
+                //temo que fazer isso
+                break;
+            case 'J'://player
+                player_variable->x = x;
+                player_variable->y = y;
+                player_variable->health_points = 5;
+                player_variable->step.cooldown = CLOCKS_PER_SEC*PLAYER_STEP_COOLDOWN;
+                player_variable->action.cooldown = CLOCKS_PER_SEC*PLAYER_ACTION_COOLDOWN;
+                break;
+            case 'X'://armadilha
+                trap_vector[trap_counter].x = x;
+                trap_vector[trap_counter].y = y;
+                trap_vector[trap_counter].action.cooldown = CLOCKS_PER_SEC*TRAP_ACTION_COOLDOWN;
+                trap_counter++;
+                break;
+            }
+        }
+    }
+    return 1;
+}
+
+bool test_move(struct STRUCT_STATS object, char map_matrix[MAP_LINES][MAP_COLUMNS+1])//semelhante a deve mover
+{
+
+    //comeca com flag 1, significando que pode mover, e vai testando condicoes que impede ele de mover
+    bool flag = 1;
+
+    //se a posicao desejada não for vazia, entao flag eh zero
+    if(!(map_matrix[object.y+object.dy][object.x+object.dx]==' ')) flag = 0;
+
+    //se a posicao desejada estiver fora dos limites do mapa, entao flag eh zero
+    if(!(object.x+object.dx>=0 && object.x+object.dx<MAP_COLUMNS && object.y+object.dy>=0 && object.y+object.dy<MAP_LINES)) flag = 0;
+
+    //se o objeto esta movendo em diagonal
+    if(object.dx!=0 && object.dy!=0)
+    {
+        //se o objeto estiver se expremendo entre 2 objetos solidos, flag eh zero
+        if(!(map_matrix[object.y+object.dy][object.x]==' ' || map_matrix[object.y][object.x+object.dx]==' ')) flag = 0;
+    }
+
+    return flag;
+}
+
+bool test_if_dead(struct STRUCT_STATS *object, char map_matrix[MAP_LINES][MAP_COLUMNS+1])//testa se o objeto morreu
+{
+    bool flag = false;
+
+    if(object->health_points<=0)
+    {
+        map_matrix[object->y][object->x] = ' ';
+        object->dx = 0;
+        object->dy = 0;
+        object->x = -1;
+        object->y = -1;
+        object->health_points = 0;
+        flag = true;
+    }
+    return flag;
+}
+
+bool test_if_object_is_there(struct STRUCT_STATS *object, char map_matrix[MAP_LINES][MAP_COLUMNS+1], int x_position, int y_position, char object_symbol)//testa se o objeto morreu
+{
+    bool flag = false;
+
+    if(map_matrix[object->y+y_position][object->x+x_position] == object_symbol) flag = true;
+
+    return flag;
+}
+
+void move(struct STRUCT_STATS *object,char matrix[MAP_LINES][MAP_COLUMNS+1])//funcao que movimenta os objetos na matriz
+{
+
+    char temp;//variavel temporaria
+
+    temp = matrix[object->y][object->x];//iguala o tipo de caractere (P, o, I) a posicao inicial da estrutura
+    matrix[object->y][object->x] = ' ';//entao zera a posicao inicial da matriz
+
+    object->x = object->x + object->dx;//encrementa dx ao x, ou seja cria o movimento e gera a nova posicao
+    object->y = object->y + object->dy;//encrementa dy ao y, ou seja cria o movimento e gera a nova posicao
+
+    matrix[object->y][object->x] = temp;//a nova posicao recebe entao o valor temporario (P, o, I) para fazer o objeto aparecer de novo
+}
+
+void damage_position(int x_position, int y_position, int damage, struct STRUCT_STATS *player_variable, struct STRUCT_STATS enemy_vector[], struct STRUCT_STATS projectile_vector[], struct STRUCT_STATS wall_vector[], struct STRUCT_STATS bomb_vector[])//funcao que movimenta os objetos na matriz
+{
+    int i;
+
+    if(player_variable->x == x_position && player_variable->y == y_position && player_variable->health_points>=1)//se a posição onde quer infligir dano é a mesma do player
+    {
+        player_variable->health_points = player_variable->health_points - damage;//decrementa da vida
+    }
+
+    for(i=0; i<MAX_ENEMIES; i++)//percorre o vetor de inimigos
+    {
+        if(enemy_vector[i].x == x_position && enemy_vector[i].y == y_position && enemy_vector[i].health_points>=1)//se a posição onde quer infligir dano é a mesma do inimigo
+        {
+            enemy_vector[i].health_points = enemy_vector[i].health_points - damage;//decrementa da vida
+        }
+    }
+    for(i=0; i<MAX_PROJECTILES; i++)//percorre o vetor de inimigos
+    {
+        if(projectile_vector[i].x == x_position && projectile_vector[i].y == y_position && projectile_vector[i].health_points>=1)//se a posição onde quer infligir dano é a mesma do projetil
+        {
+            projectile_vector[i].health_points = projectile_vector[i].health_points - damage;//decrementa da vida
+        }
+    }
+    for(i=0; i<MAX_WALLS; i++)//percorre o vetor de inimigos
+    {
+        if(wall_vector[i].x == x_position && wall_vector[i].y == y_position && wall_vector[i].health_points>=1)//se a posição onde quer infligir dano é a mesma do projetil
+        {
+            wall_vector[i].health_points = wall_vector[i].health_points - damage;//decrementa da vida
+        }
+    }
+    for(i=0; i<MAX_BOMBS; i++)//percorre o vetor de inimigos
+    {
+        if(bomb_vector[i].x == x_position && bomb_vector[i].y == y_position && bomb_vector[i].health_points>=1)//se a posição onde quer infligir dano é a mesma do projetil
+        {
+            bomb_vector[i].health_points = bomb_vector[i].health_points - damage;//decrementa da vida
+        }
+    }
+}
+
+bool shoot(struct STRUCT_STATS *shooter,struct STRUCT_STATS *shot, char matrix[MAP_LINES][MAP_COLUMNS+1],int initial_x,int initial_y,int *shot_counter,struct STRUCT_EFFECT stream_vector[], int *stream_counter)
+{
+    //funcao do tiro
+
+    if(test_if_object_is_there(shooter,matrix,initial_x,initial_y,' '))//testa se pode ser "criado" o tiro
+    {
+        shot->x = shooter->x+initial_x;//a posicao do tiro eh a posicao do player mais a posicao inicial do tiro
+        shot->y = shooter->y+initial_y;
+        shot->dx = initial_x;//o deslocamento do tiro eh igual a posicao iniciao do tiro
+        shot->dy = initial_y;//basicamente pega a direcao inicial do tiro e diz para qual direção sera seu deslocamento
+        shot->health_points = 1;
+
+        matrix[shot->y][shot->x] = 'o';//a matriz recebe o char do tiro e aparece na tela
+        stream_vector[*stream_counter].x = shot->x;
+        stream_vector[*stream_counter].y = shot->y;
+        stream_vector[*stream_counter].lifetime.timer_start = clock();
+        stream_vector[*stream_counter].lifetime.cooldown = STREAM_LIFETIME*CLOCKS_PER_SEC;
+        if(initial_x==0&&initial_y==-1)stream_vector[*stream_counter].type = 0;
+        if(initial_x==1&&initial_y==-1)stream_vector[*stream_counter].type = 2;
+        if(initial_x==1&&initial_y==0)stream_vector[*stream_counter].type = 4;
+        if(initial_x==1&&initial_y==1)stream_vector[*stream_counter].type = 6;
+        if(initial_x==0&&initial_y==1)stream_vector[*stream_counter].type = 8;
+        if(initial_x==-1&&initial_y==1)stream_vector[*stream_counter].type = 10;
+        if(initial_x==-1&&initial_y==0)stream_vector[*stream_counter].type = 12;
+        if(initial_x==-1&&initial_y==-1)stream_vector[*stream_counter].type = 14;
+        *shot_counter = *shot_counter+1;//conta quantos projeteis foram acionados
+        *stream_counter = *stream_counter+1;
+        if(*shot_counter==MAX_PROJECTILES)*shot_counter = 0;//zera a contagem
+        if(*stream_counter==MAX_STREAMS)*stream_counter = 0;//zera a contagem
+    }
+}
+
+bool place_bomb(struct STRUCT_STATS *placer,struct STRUCT_STATS *bomb, char matrix[MAP_LINES][MAP_COLUMNS+1],int initial_x,int initial_y,int *bomb_counter)
+{
+    //funcao de botar bomba
+
+    if(test_if_object_is_there(placer,matrix,initial_x,initial_y,' '))//testa se pode ser "criado" o tiro
+    {
+        bomb->x = placer->x+initial_x;//a posicao do tiro eh a posicao do player mais a posicao inicial do tiro
+        bomb->y = placer->y+initial_y;
+        bomb->health_points = 1;
+
+        matrix[bomb->y][bomb->x] = 'B';//a matriz recebe o char da bomba e aparece na tela
+
+        placer->bomb_inventory = placer->bomb_inventory - 1;
+        *bomb_counter = *bomb_counter+1;//conta quantos projeteis foram acionados
+        if(*bomb_counter==MAX_PROJECTILES)//se a contagem for igual ao maximo de projeteis na tela
+        {
+            *bomb_counter = 0;//zera a contagem
+        }
+        return true;
+    }else return false;
+}
+
+bool explode(int x_origin,int y_origin, float radius, int beam_n, int damage, char matrix[MAP_LINES][MAP_COLUMNS+1] ,struct STRUCT_STATS *player_variable, struct STRUCT_STATS enemy_vector[], struct STRUCT_STATS projectile_vector[], struct STRUCT_STATS wall_vector[], struct STRUCT_STATS bomb_vector[], struct STRUCT_EFFECT smoke_vector[], int *smoke_counter)
+{
+    int i, k, x, y;
+    float j;
+    float radians ,beam_interval = beam_n/(2*PI);
+    int flag ,damaged_position[MAP_LINES][MAP_COLUMNS] = {0};
+
+    for(i=0; i<beam_n; i++)
+    {
+        flag = 1;
+        radians = beam_interval*i;
+        for(j=0;j<=radius&&flag==1;j=j+1){
+            x = (int)round(cos(radians)*j);
+            y = (int)round(sin(radians)*j);
+            if((y_origin+y)>=0&&(y_origin+y)<MAP_LINES&&(x_origin+x)>=0&&(x_origin+x)<MAP_COLUMNS){
+                if(damaged_position[y_origin+y][x_origin+x]==0){
+                    damage_position(x_origin+x, y_origin+y ,(int)round(damage -(j/radius)*damage), player_variable, enemy_vector, projectile_vector, wall_vector, bomb_vector);
+                    damaged_position[y_origin+y][x_origin+x]=1;
+                }
+                if(matrix[y_origin+y][x_origin+x]=='#'){
+                    flag = 0;
+                }
+            }else{
+                flag = 0;
+            }
+        }
+    }
+    for(i=0;i<MAP_LINES;i++){
+        for(k=0;k<MAP_COLUMNS;k++){
+            if(damaged_position[i][k]==1){
+                smoke_vector[*smoke_counter].x = k;
+                smoke_vector[*smoke_counter].y = i;
+                smoke_vector[*smoke_counter].lifetime.timer_start = clock();
+                smoke_vector[*smoke_counter].lifetime.cooldown = SMOKE_LIFETIME*CLOCKS_PER_SEC;
+                *smoke_counter = *smoke_counter+1;
+                if(*smoke_counter>=MAX_SMOKES){
+                    *smoke_counter = 0;
+                }
+            }
+        }
+    }
+}
+
+bool load_map(char archive_name[], char current_map[MAP_LINES][MAP_COLUMNS+1])//carrega o mapa de um arquivo txt
+{
+    //+1 devido o \n no fim de cada linha
+
+    FILE *txt_arc = fopen(archive_name, "r");//o ponteiro txt_arc recebe o arquivo
+    if (txt_arc == NULL)//testa se o arquivo existe na pasta
+    {
+        printf("Opening error\n");//se inexistente imprime na tela um erro
+    }
+    else//se aberto corretamente
+    {
+        for(int n_line = 0; n_line<30; n_line++)//vasculha linha por linha do mapa ate l<30
+        {
+            if (fread(current_map[n_line], sizeof(char), (61), txt_arc) != (61))//realiza a leitura dessas linhas por caractere sendo um total de 61
+            {
+                printf("Reading error in line %d\n", n_line);//se a leitura der errado imprime na tela uma mensagem de erro e qual linha
+                fclose(txt_arc);
+                return 0;
+            }
+        }
+        fclose(txt_arc);//fecha o arquivo
+        printf("Successful loading\n");//se tudo der certo imprime na tela sucesso no carregamento
+        return 1;
+    }
+}
+
+void clear_data(struct STRUCT_STATS *object)//reseta as informações do objetos
+{
+    object->x = -1;
+    object->y = -1;
+    object->dx = 0;
+    object->dy = 0;
+    object->head_direction_x = 0;
+    object->head_direction_y = 0;
+
+    object->health_points = 0;
+    object->intends_to_put_bomb = false;
+    object->bomb_inventory = 0;
+
+    object->step.timer_start = 0;
+    object->step.timer_current = 0;
+    object->step.cooldown = 0;
+
+    object->action.timer_start = 0;
+    object->action.timer_current = 0;
+    object->action.cooldown = 0;
+}
+
+void clear_effect_data(struct STRUCT_EFFECT *effect)//reseta as informações do objetos
+{
+    effect->x = -1;
+    effect->y = -1;
+    effect->type = 0;
+
+    effect->lifetime.timer_start = 0;
+    effect->lifetime.timer_current = 0;
+    effect->lifetime.cooldown = 0;
+}
+
+int main(void)
+{
+
+    srand(time(NULL)); //inicializa o gerador de numero aleatório
+    InitWindow(MAP_PIXEL_WIDTH, MAP_PIXEL_HEIGHT, "Joguin do balacobaco");//Inicializa janela, com certo tamanho e tıtulo
+    SetTargetFPS(FPS);// Ajusta a execucao do jogo para 60 frames por segundo
+
+    //declara o jogador, projeteis e o vetor de inimigos
+    struct STRUCT_STATS player;
+    struct STRUCT_STATS projectile[MAX_PROJECTILES];
+    struct STRUCT_STATS enemy[MAX_ENEMIES];
+    struct STRUCT_STATS wall[MAX_WALLS];
+    struct STRUCT_STATS trap[MAX_TRAPS];
+    struct STRUCT_STATS bomb[MAX_BOMBS];
+    struct STRUCT_EFFECT smoke[MAX_SMOKES];
+    struct STRUCT_EFFECT stream[MAX_STREAMS];
+
+    int i,j,k;//contadores declarados aqui pois sao enviados por referencia
+    int past_x ,past_y;
+    int option = 1;
+
+    int shot_counter = 0;
+    int bomb_counter = 0;
+    int smoke_counter = 0;
+    int stream_counter = 0;
+
+    //garante que todos os dados de entidades estejam zeradas
+    clear_data(&player);
+    for(i=0; i<MAX_ENEMIES; i++)clear_data(&enemy[i]);
+    for(i=0; i<MAX_PROJECTILES; i++)clear_data(&projectile[i]);
+    for(i=0; i<MAX_WALLS; i++)clear_data(&wall[i]);
+    for(i=0; i<MAX_TRAPS; i++)clear_data(&trap[i]);
+    for(i=0; i<MAX_BOMBS; i++)clear_data(&bomb[i]);
+    for(i=0; i<MAX_SMOKES; i++)clear_effect_data(&smoke[i]);
+    for(i=0; i<MAX_STREAMS; i++)clear_effect_data(&stream[i]);
+
+    char map[MAP_LINES][MAP_COLUMNS+1];//declara a matriz do mapa
+    char map_file_name[MAX_ARCHIVE_NAME] = "map000.txt";//nome da versao do mapa que estamos jogando
+
+    SetExitKey(KEY_NULL);
+
+    bool menu_open = true;
+
+    load_map(map_file_name,map);//FUNCAO DE CARREGAMENTO DO MAPA
+    scan_map(map,&player,enemy,projectile,wall,trap,bomb,&bomb_counter);//FUNCAO DE SCANEAMENTO DE MAPA
+
+    while (!WindowShouldClose()){//Roda enquanto não for fechada a tela
+
+        if(IsKeyPressed(KEY_M)){
+            menu_open = !(menu_open);
+        }
+
+        if (!menu_open) //Roda enquanto o menu não for aberto
+        {
+            //===================================================================================================================
+            //PLAYER
+
+            if (IsKeyDown(KEY_D) || IsKeyDown(KEY_A) || IsKeyDown(KEY_W) || IsKeyDown(KEY_S))//ve se alguma das teclas estao sendo pressionadas
+            {
+                player.step.timer_current = clock();
+                if (player.step.timer_current - player.step.timer_start >= player.step.cooldown)//se o cooldown for zero, pega a intenção de movimento
+                {
+                    //determina a intencao de movimento de acordo com a combinacao de teclas
+                    if (IsKeyDown(KEY_D)) player.dx++;
+                    if (IsKeyDown(KEY_A)) player.dx--;
+                    if (IsKeyDown(KEY_W)) player.dy--;
+                    if (IsKeyDown(KEY_S)) player.dy++;
+                    player.step.timer_start = clock();
+                }
+            }
+
+            if(test_if_object_is_there(&player,map,player.dx,player.dy,'B')){
+                for(i=0; i<MAX_BOMBS; i++){
+                    if(bomb[i].x==(player.x+player.dx)&&(bomb[i].y==(player.y+player.dy))){
+                        map[bomb[i].y][bomb[i].x] = ' ';
+                        clear_data(&bomb[i]);
+                        player.bomb_inventory = player.bomb_inventory+1;
+                    }
+                }
+            }
+            if(test_move(player,map)){
+                move(&player,map);//se sim, ele move
+            }
+
+            //reseta na intenção de movimento para proximo ciclo
+            player.dx = 0;
+            player.dy = 0;
+
+            test_if_dead(&player, map);
+
+            //===================================================================================================================
+            //AÇÃO DE TIRO
+
+            if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_UP) || IsKeyDown(KEY_DOWN))//ve se alguma das teclas estao sendo pressionadas
+            {
+                player.action.timer_current = clock();
+                if (player.action.timer_current - player.action.timer_start >= player.action.cooldown)//se o cooldown for zero, pega a intenção de movimento
+                {
+                    //determina a intencao de tiro de acordo com a combinacao de teclas
+                    if (IsKeyDown(KEY_RIGHT)) player.head_direction_x++;
+                    if (IsKeyDown(KEY_LEFT)) player.head_direction_x--;
+                    if (IsKeyDown(KEY_UP)) player.head_direction_y--;
+                    if (IsKeyDown(KEY_DOWN)) player.head_direction_y++;
+                    player.action.timer_start = clock();
+                }
+            }
+
+            if (IsKeyDown(KEY_E)) player.intends_to_put_bomb = true;
+
+            if(player.head_direction_x!=0||player.head_direction_y!=0)//se alguma das direções não for nula
+            {
+                if(player.intends_to_put_bomb==true&&player.bomb_inventory>0){
+                    if(place_bomb(&player, &bomb[bomb_counter], map, player.head_direction_x, player.head_direction_y, &bomb_counter)) player.intends_to_put_bomb = false;
+                }else{
+                    shoot(&player, &projectile[shot_counter], map, player.head_direction_x, player.head_direction_y, &shot_counter, stream, &stream_counter);//atira
+                    player.intends_to_put_bomb = false;
+                }
+            }
+
+            player.head_direction_x = 0;
+            player.head_direction_y = 0;
+
+            for(i=0; i<MAX_PROJECTILES; i++)//percorre o vetor de projéteis
+            {
+                if(test_move(projectile[i],map))//se o projétil puder mover
+                {
+                    move(&projectile[i],map);//move o projétil
+                    stream[stream_counter].x = projectile[i].x;
+                    stream[stream_counter].y = projectile[i].y;
+                    stream[stream_counter].lifetime.timer_start = clock();
+                    stream[stream_counter].lifetime.cooldown = STREAM_LIFETIME*CLOCKS_PER_SEC;
+                    if(projectile[i].dx==0&&projectile[i].dy==-1)stream[stream_counter].type = 0;
+                    if(projectile[i].dx==1&&projectile[i].dy==-1)stream[stream_counter].type = 2;
+                    if(projectile[i].dx==1&&projectile[i].dy==0)stream[stream_counter].type = 4;
+                    if(projectile[i].dx==1&&projectile[i].dy==1)stream[stream_counter].type = 6;
+                    if(projectile[i].dx==0&&projectile[i].dy==1)stream[stream_counter].type = 8;
+                    if(projectile[i].dx==-1&&projectile[i].dy==1)stream[stream_counter].type = 10;
+                    if(projectile[i].dx==-1&&projectile[i].dy==0)stream[stream_counter].type = 12;
+                    if(projectile[i].dx==-1&&projectile[i].dy==-1)stream[stream_counter].type = 14;
+                    stream_counter = stream_counter+1;
+                    if(stream_counter>=MAX_SMOKES){
+                        stream_counter = 0;
+                    }
+                }
+                else//se não puder mover
+                {
+                    damage_position(projectile[i].x+projectile[i].dx,projectile[i].y+projectile[i].dy ,1 ,&player, enemy, projectile, wall, bomb);
+                    projectile[i].health_points--;
+                    test_if_dead(&projectile[i], map);
+                }
+            }
+
+            //===================================================================================================================
+            //MOVIMENTO DO INIMIGO
+
+            for(i=0; i<MAX_ENEMIES; i++)//percorre o vetor de inimigos
+            {
+                test_if_dead(&enemy[i], map);
+                enemy[i].step.timer_current = clock();
+                if (enemy[i].step.timer_current - enemy[i].step.timer_start >= enemy[i].step.cooldown)//se o cooldown for zero, pega a intenção de movimento
+                {
+                    if (player.x > enemy[i].x)
+                        enemy[i].dx = 1;
+                    if (player.x < enemy[i].x)
+                        enemy[i].dx = -1;
+                    if (player.y > enemy[i].y)
+                        enemy[i].dy = 1;
+                    if (player.y < enemy[i].y)
+                        enemy[i].dy = -1;
+                    enemy[i].step.timer_start = clock();
+
+                    if(test_move(enemy[i],map))//testa se ele pode mover
+                    {
+                        move(&enemy[i],map);//move
+                    }
+                    else if((enemy[i].x>=0 && enemy[i].x<MAP_COLUMNS && enemy[i].y>=0 && enemy[i].y<MAP_LINES))
+                    {
+                        enemy[i].action.timer_current = clock();
+                        if(!test_if_object_is_there (&enemy[i],map,enemy[i].dx,enemy[i].dy,'I')&&enemy[i].action.timer_current - enemy[i].action.timer_start >= enemy[i].action.cooldown)
+                        {
+
+                            damage_position(enemy[i].x+enemy[i].dx,enemy[i].y+enemy[i].dy,1,&player, enemy, projectile, wall, bomb);
+                            enemy[i].action.timer_start = clock();
+                        }
+                        enemy[i].dx = (-1 + (rand()%3));
+                        enemy[i].dy = (-1 + (rand()%3));
+                        if(test_move(enemy[i],map))//testa se ele pode mover
+                        {
+                            move(&enemy[i],map);//move
+                        }
+                    }
+                    enemy[i].dx = 0;
+                    enemy[i].dy = 0;
+                }
+            }
+            //===================================================================================================================
+            //ARMADILHAS
+
+            for(i=0; i<MAX_TRAPS; i++)//percorre o vetor de inimigos
+            {
+                if(test_if_object_is_there(&trap[i],map,0,0,'J')){
+                    trap[i].action.timer_current = clock();
+                    if (trap[i].action.timer_current - trap[i].action.timer_start >= trap[i].action.cooldown)//se o cooldown for zero, pega a intenção de movimento
+                    {
+                        damage_position(trap[i].x ,trap[i].y , 1 ,&player, enemy, projectile, wall, bomb);
+                        trap[i].action.timer_start = clock();
+                    }
+                }
+            }
+
+            //===================================================================================================================
+            //PAREDES
+
+            for(i=0; i<MAX_WALLS; i++)//percorre o vetor de inimigos
+            {
+                test_if_dead(&wall[i], map);
+            }
+
+            //===================================================================================================================
+            //BOMBAS
+
+            for(i=0; i<MAX_BOMBS; i++)
+            {
+                past_x = bomb[i].x;
+                past_y = bomb[i].y;
+                if(bomb[i].x>=0&&bomb[i].x<MAP_COLUMNS&&bomb[i].y>=0&&bomb[i].y<MAP_LINES){
+                    if(test_if_dead(&bomb[i], map)){
+                        explode(past_x,past_y,BOMB_RADIUS,180,BOMB_DAMAGE,map,&player, enemy, projectile, wall, bomb, smoke, &smoke_counter);
+                    }
+                }
+            }
+        }
+        //===================================================================================================================
+        //MAPA
+
+        BeginDrawing();//inicializa ambiente para desenho
+        if(menu_open){
+            draw_menu(option);
+            if (IsKeyPressed(KEY_DOWN)&&option<5) option++;
+            if (IsKeyPressed(KEY_UP)&&option>1) option--;
+
+            if ((IsKeyPressed(KEY_ENTER)&&option==1)||IsKeyPressed(KEY_N));
+            if ((IsKeyPressed(KEY_ENTER)&&option==2)||IsKeyPressed(KEY_L));
+            if ((IsKeyPressed(KEY_ENTER)&&option==3)||IsKeyPressed(KEY_S));
+            if ((IsKeyPressed(KEY_ENTER)&&option==4)||IsKeyPressed(KEY_Q)) CloseWindow();
+            if ((IsKeyPressed(KEY_ENTER)&&option==5)) menu_open = false;
+        }else{
+            draw_map(map, enemy[0], player, trap);
+            draw_effects(smoke,stream);
+        }
+        EndDrawing();
+    }
+
+    CloseWindow();// Fecha a janela e o contexto OpenGL
+    return 0;
+}
