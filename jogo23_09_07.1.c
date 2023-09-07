@@ -777,6 +777,7 @@ int main(void)
                     if(data.portal[i].x==(data.player.x+data.player.dx)&&(data.portal[i].y==(data.player.y+data.player.dy))){
                         data.level = data.level+1;
                         update_arc_name(map_file_name,data.level);
+                        clear_all_data(&data);
                         load_map(&data,map_file_name);//FUNCAO DE CARREGAMENTO DO MAPA
                         scan_map(&data);//FUNCAO DE SCANEAMENTO DE MAPA
                     }
