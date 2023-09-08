@@ -158,7 +158,7 @@ bool draw_map (struct STRUCT_DATA *data, Texture2D texture[])//funcao que le o q
             switch(data->map[y][x])//interpretacao dos caracteres
             {
 
-            case 'Z'://inimigo
+            case 'I'://inimigo
                 DrawTexture(texture[2],x*SIDE,y*SIDE,WHITE);
                 break;
 
@@ -174,7 +174,7 @@ bool draw_map (struct STRUCT_DATA *data, Texture2D texture[])//funcao que le o q
                 DrawTexture(texture[8],x*SIDE,y*SIDE,WHITE);
                 break;
 
-            case 'T'://bomba
+            case 'B'://bomba
                 DrawTexture(texture[6],x*SIDE,y*SIDE,WHITE);
                 break;
 
@@ -190,6 +190,9 @@ bool draw_map (struct STRUCT_DATA *data, Texture2D texture[])//funcao que le o q
                 DrawTexture(texture[11],x*SIDE,y*SIDE,WHITE);
                 DrawTexture(texture[7],x*SIDE,y*SIDE,WHITE);
                 //DrawCircle(xSIDE+SIDE/2, ySIDE+SIDE/2, SIDE/4, BLACK);
+                break;
+            case 'O'://tiro
+                DrawTexture(texture[3],x*SIDE,y*SIDE,WHITE);
                 break;
             case ' '://espaço livre
                 DrawTexture(texture[11],x*SIDE,y*SIDE,WHITE);
@@ -376,7 +379,7 @@ bool scan_map (struct STRUCT_DATA *data)
                 data->wall1[data->wall1_counter].y = y;
                 data->wall1_counter=data->wall1_counter+1;
                 break;
-            case 'Z'://inimigo ZUMBI
+            case 'I'://inimigo ZUMBI
                 data->enemy[data->enemy_counter].x = x;
                 data->enemy[data->enemy_counter].y = y;
                 data->enemy[data->enemy_counter].health_points = 5;
@@ -408,7 +411,7 @@ bool scan_map (struct STRUCT_DATA *data)
                 data->enemy3[data->enemy3_counter].action.cooldown = CLOCKS_PER_SEC*ENEMY3_ACTION_COOLDOWN;
                 data->enemy3_counter = data->enemy3_counter+1;
                 break;
-            case 'T'://bomba
+            case 'B'://bomba
                 data->bomb[data->bomb_counter].x = x;
                 data->bomb[data->bomb_counter].y = y;
                 data->bomb[data->bomb_counter].health_points = 1;
@@ -660,7 +663,7 @@ bool place_bomb(struct STRUCT_DATA *data, struct STRUCT_STATS *placer,int initia
         data->bomb[data->bomb_counter].y = placer->y+initial_y;
         data->bomb[data->bomb_counter].health_points = 1;
 
-        data->map[data->bomb[data->bomb_counter].y][data->bomb[data->bomb_counter].x] = 'T';//a matriz recebe o char da bomba e aparece na tela
+        data->map[data->bomb[data->bomb_counter].y][data->bomb[data->bomb_counter].x] = 'B';//a matriz recebe o char da bomba e aparece na tela
 
         placer->bomb_inventory = placer->bomb_inventory - 1;
         data->bomb_counter = data->bomb_counter+1;//conta quantos projeteis foram acionados
@@ -821,6 +824,7 @@ int main(void)
     InitAudioDevice();
     SetTargetFPS(FPS);// Ajusta a execucao do jogo para 60 frames por segundo
     SetExitKey(KEY_NULL);
+    SetMasterVolume(0.25);
 
     struct STRUCT_DATA data;
     struct STRUCT_TEXTURE texture;
@@ -837,7 +841,7 @@ int main(void)
     textures[0] = LoadTexture("resources/textures/steve.png");// Texture loading
     textures[1] = LoadTexture("resources/textures/skeleton.png"); // Texture loading
     textures[2] = LoadTexture("resources/textures/zombie.png");// Texture loading
-    textures[3] = LoadTexture("resources/textures/stone.png");// Texture loading
+    textures[3] = LoadTexture("resources/textures/obsidian.png");// Texture loading
     textures[4] = LoadTexture("resources/textures/portal.png");// Texture loading
     textures[5] = LoadTexture("resources/textures/lava.png"); // Texture loading
     textures[6] = LoadTexture("resources/textures/tnt.png");// Texture loading
@@ -897,7 +901,7 @@ int main(void)
                 }
             }
 
-            if(test_if_object_is_there(&data,&data.player,data.player.dx,data.player.dy,'T')){
+            if(test_if_object_is_there(&data,&data.player,data.player.dx,data.player.dy,'B')){
                 for(i=0; i<MAX_BOMBS; i++){
                     if(data.bomb[i].x==(data.player.x+data.player.dx)&&(data.bomb[i].y==(data.player.y+data.player.dy))){
                         data.map[data.bomb[i].y][data.bomb[i].x] = ' ';
